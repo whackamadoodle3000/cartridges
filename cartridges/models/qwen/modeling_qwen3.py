@@ -134,6 +134,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
 class Qwen3Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
+    _activation_store: list | None = None
+
     def __init__(self, config: Qwen3Config, layer_idx: int):
         super().__init__()
         self.config = config
@@ -173,6 +175,12 @@ class Qwen3Attention(nn.Module):
         cos, sin = batch.position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
+        if Qwen3Attention._activation_store is not None:
+            Qwen3Attention._activation_store.append({
+                "layer_idx": self.layer_idx,
+                "query_states": query_states.detach().cpu(),
+                "key_states": key_states.detach().cpu(),
+            })
 
         past_key_value = batch.past_key_values
         if past_key_value is not None:
