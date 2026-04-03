@@ -5,19 +5,19 @@
 The experiment has 5 sequential phases:
 
 1. **SGLang server** — Serve Qwen3-4B locally so self-study synthesis can call it.
-2. **Synthesis** — Use the running model to generate synthetic Q&A conversations about
-   Frankenstein (train split: 256, eval split: 64). The model asks and answers its own
-   questions about chunks of the document. *Cancel the SGLang job after this finishes.*
+2. **Synthesis** — Use the running model to generate 256 synthetic Q&A conversations about
+   the document. The model asks and answers its own questions about chunks of the document.
+   A single set of conversations is used for everything (training, selection, and rank
+   measurement). *Cancel the SGLang job after this finishes.*
 3. **Training** — For each compression ratio, run Cartridges gradient descent. The KV
    cache starts from a causal forward pass over the document (first N tokens at ratio N),
-   then is optimized via gradient descent on the 256 train-split conversations to produce
-   good model outputs when answering questions about the document. Output: `cache_last.pt`
-   per ratio.
-4. **Collection** — For all 13 conditions (init_full, trained_full, snapkv/trained ×5),
-   run a forward pass over the 64 eval-split conversations using each condition's KV cache.
+   then is optimized via gradient descent on the conversations to produce good model outputs
+   when answering questions about the document. Output: `cache_last.pt` per ratio.
+4. **Collection** — For all 8 conditions (init_full, trained_full, snapkv/trained × 3
+   ratios), run a forward pass over the conversations using each condition's KV cache.
    Capture Q and K_conv via the activation hook, compute Y (the cartridge's real attention
    contribution), and save V and Y tensors.
-5. **Plotting** — Load all 13 `.pt` files and produce bar charts, heatmaps, and summary
+5. **Plotting** — Load all 8 `.pt` files and produce bar charts, heatmaps, and summary
    plots of effective rank.
 
 ## SSH Login
@@ -29,21 +29,31 @@ ssh <gtusername>@login-ice.pace.gatech.edu
 ## Environment Setup
 
 ```bash
-# Create conda env
+# Load required modules (check available CUDA version with: module avail cuda)
 module load anaconda3
+module load cuda/12.1   # adjust to whichever CUDA version is available on ICE
+
+# Create conda env with Python 3.12 (required by cartridges)
 conda create -n cartridges python=3.12 -y
 conda activate cartridges
 
-# Clone and install
+# Install PyTorch with CUDA support FIRST — must match the loaded CUDA version.
+# cu121 = CUDA 12.1; use cu118 if CUDA 11.8 is available instead.
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Clone repo and install all cartridges dependencies (transformers, wandb, etc.)
 git clone <your-cartridges-repo-url> ~/cartridges
 cd ~/cartridges
 pip install -e .
 
-# SGLang for local model serving
+# SGLang for serving Qwen3-4B locally (synthesis phase only)
 pip install "sglang[all]"
+```
 
-# Matplotlib for plotting (no display needed)
-pip install matplotlib
+Verify the GPU is visible after installing torch:
+```bash
+python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
+# Should print: True  12.1 (or whichever version you loaded)
 ```
 
 ## Environment Variables
@@ -66,47 +76,49 @@ mkdir -p ~/cartridges/data/rank_analysis
 mkdir -p ~/cartridges/plots
 ```
 
-## Download the Document
+## Copy the Document to PACE
+
+The document (`qasper_e_line_203_context.txt`) lives in the repo root. Copy it to PACE
+along with the rest of the repo — no separate download needed.
 
 ```bash
-cd ~/cartridges/experiments/rank_analysis/data
-wget -O frankenstein.txt https://www.gutenberg.org/cache/epub/84/pg84.txt
+# Verify it's present after cloning/copying
+ls ~/cartridges/qasper_e_line_203_context.txt
 ```
 
 ### Switching to a Different Document
 
-The document path is referenced in two places. Update both before running any phase:
+The document path is hardcoded in two files. Update both before running any phase:
 
 **1. `synthesize_config.py`** — controls what the model generates Q&A conversations about:
 ```python
-DOC_PATH = os.path.join(CARTRIDGES_DIR, "experiments/rank_analysis/data/frankenstein.txt")
+DOC_PATH = os.path.join(CARTRIDGES_DIR, "qasper_e_line_203_context.txt")
 # Change to e.g.:
-DOC_PATH = os.path.join(CARTRIDGES_DIR, "experiments/rank_analysis/data/longhealthtext.txt")
+DOC_PATH = os.path.join(CARTRIDGES_DIR, "my_other_doc.txt")
 ```
 
 **2. `train_configs.py`** — controls `KVFromText`, the initial document forward pass:
 ```python
-DEFAULT_DOC = os.path.join(CARTRIDGES_DIR, "experiments/rank_analysis/data/frankenstein.txt")
+DEFAULT_DOC = os.path.join(CARTRIDGES_DIR, "qasper_e_line_203_context.txt")
 # Change to e.g.:
-DEFAULT_DOC = os.path.join(CARTRIDGES_DIR, "experiments/rank_analysis/data/longhealthtext.txt")
+DEFAULT_DOC = os.path.join(CARTRIDGES_DIR, "my_other_doc.txt")
 ```
 
 Then re-run all 4 phases from scratch (synthesis → training → collection → plotting) — the
-trained cartridges and eval parquets are document-specific and cannot be reused.
+trained cartridges and the self-study parquet are document-specific and cannot be reused.
 
-Token length check: Qwen3-4B's `max_position_embeddings` is 40960. Verify your document
-fits by running:
+Token length check: Qwen3-4B's native context is 32,768 tokens. Verify your document fits:
 ```bash
 python -c "
 from transformers import AutoTokenizer
 tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-4b')
-text = open('experiments/rank_analysis/data/longhealthtext.txt').read()
+text = open('qasper_e_line_203_context.txt').read()
 n = len(tok.encode(text))
-print(f'{n} tokens (limit: 40960)')
+print(f'{n} tokens (limit: ~16k recommended, hard limit: 32768)')
 "
 ```
-If it exceeds ~35k tokens, either trim the file or the `KVFromText` max_tokens computation
-in `train_configs.py` (currently uses `int(ratio * 30_000)` as an approximation).
+If it exceeds ~28k tokens, either trim the file or update the `int(ratio * 30_000)`
+approximation in `train_configs.py` to match the actual token count.
 
 ## Phase 0: Launch SGLang Server
 
@@ -178,22 +190,20 @@ export SGLANG_URL=http://localhost:30000/v1
 
 cd $CARTRIDGES_DIR
 
-# Train set: 256 conversations
-python experiments/rank_analysis/synthesize_config.py --split train
-
-# Eval set: 64 conversations
-python experiments/rank_analysis/synthesize_config.py --split eval
+python experiments/rank_analysis/synthesize_config.py
 ```
 
 ```bash
 sbatch slurm_synthesize.sh
 ```
 
-The parquet files will be saved at:
-- `$CARTRIDGES_OUTPUT_DIR/rank_analysis_synth_train/artifact/dataset.parquet`
-- `$CARTRIDGES_OUTPUT_DIR/rank_analysis_synth_eval/artifact/dataset.parquet`
+The parquet will be saved at:
+- `$CARTRIDGES_OUTPUT_DIR/rank_analysis_synth/artifact/dataset.parquet`
 
-## Phase 2: Train Cartridges (6 Ratios)
+This single set of 256 conversations is used for everything: Cartridges training,
+SnapKV token selection, and rank measurement.
+
+## Phase 2: Train Cartridges (4 Ratios)
 
 **Important: cancel the SGLang server job before submitting training.** Both SGLang and the
 training job load Qwen3-4B onto the same GPU. They cannot run simultaneously on one A100.
@@ -227,7 +237,7 @@ export WANDB_MODE=offline
 
 cd $CARTRIDGES_DIR
 
-for ratio in 1.0 0.5 0.2 0.1 0.05 0.02; do
+for ratio in 1.0 0.1 0.05 0.02; do
     echo "=== Training ratio=$ratio ==="
     python experiments/rank_analysis/train_configs.py --ratio $ratio
 done
@@ -240,7 +250,7 @@ sbatch slurm_train.sh
 Checkpoints will be saved at:
 - `$CARTRIDGES_OUTPUT_DIR/rank_analysis_ratio_<r>/cache_last.pt`
 
-## Phase 3: Collect KV Data (13 Conditions)
+## Phase 3: Collect KV Data (8 Conditions)
 
 `slurm_collect.sh`:
 
@@ -263,33 +273,33 @@ export WANDB_MODE=offline
 
 cd $CARTRIDGES_DIR
 
-DOC=experiments/rank_analysis/data/frankenstein.txt
-EVAL=$CARTRIDGES_OUTPUT_DIR/rank_analysis_synth_eval/artifact/dataset.parquet
+DOC=qasper_e_line_203_context.txt
+PARQUET=$CARTRIDGES_OUTPUT_DIR/rank_analysis_synth/artifact/dataset.parquet
 OUT=data/rank_analysis
 
 # 1) init_full
 python experiments/rank_analysis/collect_kv_data.py \
     --condition init_full --document $DOC \
-    --eval-parquet $EVAL --output-dir $OUT
+    --parquet $PARQUET --output-dir $OUT
 
 # 2) trained_full (ratio 1.0)
 python experiments/rank_analysis/collect_kv_data.py \
     --condition trained --ratio 1.0 \
     --trained-checkpoint $CARTRIDGES_OUTPUT_DIR/rank_analysis_ratio_1.0/cache_last.pt \
-    --document $DOC --eval-parquet $EVAL --output-dir $OUT
+    --document $DOC --parquet $PARQUET --output-dir $OUT
 
-# 3-12) snapkv and trained for each ratio
-for ratio in 0.5 0.2 0.1 0.05 0.02; do
+# 3-8) snapkv and trained for each ratio
+for ratio in 0.1 0.05 0.02; do
     echo "=== SnapKV ratio=$ratio ==="
     python experiments/rank_analysis/collect_kv_data.py \
         --condition snapkv --ratio $ratio \
-        --document $DOC --eval-parquet $EVAL --output-dir $OUT
+        --document $DOC --parquet $PARQUET --output-dir $OUT
 
     echo "=== Trained ratio=$ratio ==="
     python experiments/rank_analysis/collect_kv_data.py \
         --condition trained --ratio $ratio \
         --trained-checkpoint $CARTRIDGES_OUTPUT_DIR/rank_analysis_ratio_$ratio/cache_last.pt \
-        --document $DOC --eval-parquet $EVAL --output-dir $OUT
+        --document $DOC --parquet $PARQUET --output-dir $OUT
 done
 ```
 

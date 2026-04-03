@@ -27,8 +27,6 @@ N_KV_HEADS = 8
 CONDITION_ORDER = [
     "init_full",
     "trained_full",
-    "snapkv_0.5", "trained_0.5",
-    "snapkv_0.2", "trained_0.2",
     "snapkv_0.1", "trained_0.1",
     "snapkv_0.05", "trained_0.05",
     "snapkv_0.02", "trained_0.02",
@@ -37,8 +35,6 @@ CONDITION_ORDER = [
 CONDITION_COLORS = {
     "init_full": "#1f77b4",
     "trained_full": "#ff7f0e",
-    "snapkv_0.5": "#2ca02c", "trained_0.5": "#d62728",
-    "snapkv_0.2": "#9467bd", "trained_0.2": "#8c564b",
     "snapkv_0.1": "#e377c2", "trained_0.1": "#7f7f7f",
     "snapkv_0.05": "#bcbd22", "trained_0.05": "#17becf",
     "snapkv_0.02": "#aec7e8", "trained_0.02": "#ffbb78",

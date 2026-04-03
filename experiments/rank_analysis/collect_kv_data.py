@@ -5,17 +5,18 @@ For each condition, saves V_cart and the cartridge's real attention contribution
 per layer and KV head.
 
 Usage:
-    python collect_kv_data.py --condition init_full --document data/frankenstein.txt \
-        --eval-parquet data/eval_self_study.parquet --output-dir data/rank_analysis/
+    python collect_kv_data.py --condition init_full \
+        --document qasper_e_line_203_context.txt \
+        --parquet data/self_study.parquet --output-dir data/rank_analysis/
 
-    python collect_kv_data.py --condition trained --ratio 0.5 \
-        --trained-checkpoint $OUT/rank_analysis_ratio_0.5/cache_last.pt \
-        --document data/frankenstein.txt --eval-parquet data/eval_self_study.parquet \
-        --output-dir data/rank_analysis/
+    python collect_kv_data.py --condition trained --ratio 0.1 \
+        --trained-checkpoint $OUT/rank_analysis_ratio_0.1/cache_last.pt \
+        --document qasper_e_line_203_context.txt \
+        --parquet data/self_study.parquet --output-dir data/rank_analysis/
 
-    python collect_kv_data.py --condition snapkv --ratio 0.5 \
-        --document data/frankenstein.txt --eval-parquet data/eval_self_study.parquet \
-        --output-dir data/rank_analysis/
+    python collect_kv_data.py --condition snapkv --ratio 0.1 \
+        --document qasper_e_line_203_context.txt \
+        --parquet data/self_study.parquet --output-dir data/rank_analysis/
 """
 import argparse
 import math
@@ -182,62 +183,48 @@ def compute_attention_outputs(keys, values, Q_per_layer, K_conv_per_layer):
 
 
 def build_snapkv_cache(
-    model, tokenizer, attn_config, doc_path: str, ratio: float, device="cuda"
+    model, tokenizer, attn_config, doc_path: str, ratio: float,
+    conv_ids: torch.Tensor, device="cuda"
 ):
-    """Build a SnapKV-compressed cache by selecting top tokens per head."""
+    """Build a SnapKV-compressed cache by selecting top document tokens per head.
+
+    Uses the same self-study eval conversation queries that Cartridges trains on,
+    rather than an arbitrary observation window from the document itself.  This makes
+    the comparison fair: both SnapKV and Cartridges see the same queries; the only
+    difference is *how* they use them (selection vs gradient descent).
+
+    Steps:
+      1. Build full-document cache via KVFromText.
+      2. Run eval conversations against that full cache to capture Q per layer/head.
+      3. For each layer/head, compute attention(Q, K_full) scores.
+      4. Sum scores across all conv tokens, pool, and select top-k document positions.
+    """
     full_cache = build_init_cache(model, tokenizer, attn_config, doc_path, max_tokens=None)
     full_keys, full_values = extract_kv(full_cache)
     T_full = full_keys[0].shape[1]
     T_cart = int(ratio * T_full)
 
-    content = Path(doc_path).read_text()
-    tokenize_fn = MODEL_TO_SYSTEM_PROMPT_TOKENIZER[tokenizer.name_or_path.lower()]
-    input_ids = tokenize_fn(tokenizer=tokenizer, content=content, max_tokens=None).squeeze(0)
-
-    obs_window = 64
-    obs_cache = TrainableCache(config=attn_config)
-    Qwen3Attention._activation_store = []
-    with torch.no_grad():
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            ids = input_ids.to(device)
-            seq_ids = torch.zeros(ids.shape[0], dtype=torch.long, device=device)
-            pos_ids = torch.arange(ids.shape[0], dtype=torch.long, device=device)
-            model(
-                input_ids=ids, seq_ids=seq_ids, position_ids=pos_ids,
-                past_key_values=obs_cache, use_cache=True, mode="generate",
-            )
-
-    records = Qwen3Attention._activation_store
-    Qwen3Attention._activation_store = None
-
-    by_layer = defaultdict(list)
-    for rec in records:
-        by_layer[rec["layer_idx"]].append(rec)
-
-    Q_obs_per_layer = {}
-    for layer_idx, recs in by_layer.items():
-        Q_all = torch.cat([r["query_states"] for r in recs], dim=2)
-        Q_obs_per_layer[layer_idx] = Q_all[:, :, -obs_window:, :]  # (1, n_q_heads, 64, head_dim)
+    Q_per_layer, _ = run_forward_with_hooks(model, full_cache, conv_ids, device)
 
     snap_keys_list = []
     snap_values_list = []
 
+    scale = 1.0 / math.sqrt(HEAD_DIM)
     for l in range(N_LAYERS):
         K_full_l = full_keys[l].float()   # (n_kv_heads, T_full, head_dim)
         V_full_l = full_values[l].float()
-        Q_obs_l = Q_obs_per_layer[l][0].float()  # (n_q_heads, 64, head_dim)
+        Q_l = Q_per_layer[l][0].float()   # (n_q_heads, n_conv, head_dim)
 
-        scale = 1.0 / math.sqrt(HEAD_DIM)
         snap_k_heads = []
         snap_v_heads = []
 
         for h in range(N_KV_HEADS):
             K_h = K_full_l[h]  # (T_full, head_dim)
             q_start = h * GQA_RATIO
-            Q_obs_h = Q_obs_l[q_start:q_start + GQA_RATIO]  # (4, 64, head_dim)
+            Q_h = Q_l[q_start:q_start + GQA_RATIO]  # (4, n_conv, head_dim)
 
-            scores = torch.einsum("gnd,td->gnt", Q_obs_h, K_h) * scale
-            attn = F.softmax(scores, dim=-1)  # (4, 64, T_full)
+            scores = torch.einsum("gnd,td->gnt", Q_h, K_h) * scale
+            attn = F.softmax(scores, dim=-1)  # (4, n_conv, T_full)
             vote = attn.mean(dim=0).sum(dim=0)  # (T_full,)
 
             vote_pooled = F.avg_pool1d(
@@ -265,8 +252,8 @@ def build_snapkv_cache(
     return snap_cache
 
 
-def tokenize_eval_conversations(eval_parquet: str, tokenizer) -> torch.Tensor:
-    """Load and tokenize eval self-study conversations into a flat token sequence.
+def tokenize_conversations(parquet_path: str, tokenizer) -> torch.Tensor:
+    """Load and tokenize self-study conversations into a flat token sequence.
 
     Skips 'system' messages because they contain a document chunk that was used
     during synthesis but should NOT be present during rank analysis — the cartridge
@@ -274,7 +261,7 @@ def tokenize_eval_conversations(eval_parquet: str, tokenizer) -> torch.Tensor:
     """
     import json
 
-    df = pd.read_parquet(eval_parquet)
+    df = pd.read_parquet(parquet_path)
 
     all_ids = []
     for _, row in df.iterrows():
@@ -341,8 +328,8 @@ def main():
     parser.add_argument("--document", required=True, help="Path to document text file")
     parser.add_argument("--trained-checkpoint", type=str, default=None,
                         help="Path to cache_last.pt (required for trained condition)")
-    parser.add_argument("--eval-parquet", required=True,
-                        help="Path to eval self-study parquet")
+    parser.add_argument("--parquet", required=True,
+                        help="Path to self-study conversations parquet")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -364,12 +351,23 @@ def main():
     print("Loading model...")
     model, tokenizer, attn_config = load_model(args.device)
 
+    print("Tokenizing self-study conversations...")
+    conv_ids = tokenize_conversations(args.parquet, tokenizer)
+    n_conv_tokens = conv_ids.shape[0]
+    print(f"Eval conversation tokens: {n_conv_tokens}")
+
+    content = Path(args.document).read_text()
+    tokenize_fn = MODEL_TO_SYSTEM_PROMPT_TOKENIZER[tokenizer.name_or_path.lower()]
+    T_full_ids = tokenize_fn(tokenizer=tokenizer, content=content, max_tokens=None).squeeze(0)
+    T_full = T_full_ids.shape[0]
+
     print("Building cache...")
     if args.condition == "init_full":
         cache = build_init_cache(model, tokenizer, attn_config, args.document, max_tokens=None)
     elif args.condition == "snapkv":
         cache = build_snapkv_cache(
-            model, tokenizer, attn_config, args.document, args.ratio, args.device
+            model, tokenizer, attn_config, args.document, args.ratio,
+            conv_ids, args.device
         )
     elif args.condition == "trained":
         cache = TrainableCache.from_pretrained(args.trained_checkpoint, device=args.device)
@@ -378,18 +376,7 @@ def main():
 
     keys, values = extract_kv(cache)
     T_cart = keys[0].shape[1]
-
-    content = Path(args.document).read_text()
-    tokenize_fn = MODEL_TO_SYSTEM_PROMPT_TOKENIZER[tokenizer.name_or_path.lower()]
-    T_full_ids = tokenize_fn(tokenizer=tokenizer, content=content, max_tokens=None).squeeze(0)
-    T_full = T_full_ids.shape[0]
-
     print(f"T_cart={T_cart}, T_full={T_full}")
-
-    print("Tokenizing eval conversations...")
-    conv_ids = tokenize_eval_conversations(args.eval_parquet, tokenizer)
-    n_conv_tokens = conv_ids.shape[0]
-    print(f"Eval conversation tokens: {n_conv_tokens}")
 
     print("Running forward pass with hooks...")
     Q_per_layer, K_conv_per_layer = run_forward_with_hooks(

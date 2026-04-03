@@ -13,6 +13,7 @@ dependencies = [
     "datasets",
     "transformers>=4.49.0,<=4.55",
     "numpy",
+    "pandas",
     "einops",
     "tqdm",
     "wandb",
