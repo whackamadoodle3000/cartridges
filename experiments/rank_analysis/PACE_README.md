@@ -28,20 +28,47 @@ ssh <gtusername>@login-ice.pace.gatech.edu
 
 ## Environment Setup
 
+### 1. Load modules and create the conda environment
+
+PACE ICE has `cuda/12.6.1`, `cuda/12.9.1`, and `cuda/13.0.1`. Use **`cuda/12.6.1`** — it has
+an exact PyTorch wheel match (`cu126`) and is the most stable choice on A100s.
+
+Create the environment in scratch, not home — the default `~/.conda/envs/` location is on a
+home directory with a small quota (~25 GB). PyTorch + SGLang + model weights + checkpoints
+easily exceed that. Scratch on PACE ICE is at `~/scratch`.
+
 ```bash
-# Load required modules (check available CUDA version with: module avail cuda)
 module load anaconda3
-module load cuda/12.1   # adjust to whichever CUDA version is available on ICE
+module load cuda/12.6.1
 
-# Create conda env with Python 3.12 (required by cartridges)
-conda create -n cartridges python=3.12 -y
-conda activate cartridges
+# Create env in scratch to avoid home quota limits
+# Replace <gtusername> with your GT username
+conda create --prefix ~/scratch/envs/cartridges python=3.12 -y
+conda activate ~/scratch/envs/cartridges
+```
 
-# Install PyTorch with CUDA support FIRST — must match the loaded CUDA version.
-# cu121 = CUDA 12.1; use cu118 if CUDA 11.8 is available instead.
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+To avoid typing the full path every time, add this to `~/.bashrc`:
+```bash
+conda config --append envs_dirs ~/scratch/envs
+# After this you can use: conda activate cartridges
+```
 
-# Clone repo and install all cartridges dependencies (transformers, wandb, etc.)
+### 2. Install PyTorch 2.11 with CUDA 12.6
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```
+
+> **Other available CUDA options and why we skip them:**
+> - `cuda/12.9.1` — no exact cu129 PyTorch wheel; would require cu128 wheels relying on
+>   backward compatibility. Fine, but not a clean match.
+> - `cuda/13.0.1` — PyTorch 2.11 supports it (`cu130`), but 13.0 is very new and less
+>   battle-tested on A100 hardware. Use if you have a specific reason.
+> - `cuda/11.x` — not supported by PyTorch 2.11. Do not use.
+
+### 3. Install cartridges and SGLang
+
+```bash
 git clone <your-cartridges-repo-url> ~/cartridges
 cd ~/cartridges
 pip install -e .
@@ -50,19 +77,22 @@ pip install -e .
 pip install "sglang[all]"
 ```
 
-Verify the GPU is visible after installing torch:
+### 4. Verify GPU and CUDA
+
 ```bash
-python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
-# Should print: True  12.1 (or whichever version you loaded)
+python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda, torch.__version__)"
+# Should print: True  12.6  2.11.x
 ```
+
 
 ## Environment Variables
 
-Add to your `~/.bashrc` or set in each SLURM script:
+Add to your `~/.bashrc` (replace `<gtusername>` with your GT username):
 
 ```bash
 export CARTRIDGES_DIR=~/cartridges
-export CARTRIDGES_OUTPUT_DIR=~/cartridges_output
+export CARTRIDGES_OUTPUT_DIR=~/scratch/cartridges_output
+export HF_HOME=~/scratch/hf_cache
 export WANDB_MODE=offline
 export SGLANG_URL=http://localhost:30000/v1
 ```
@@ -71,7 +101,7 @@ export SGLANG_URL=http://localhost:30000/v1
 
 ```bash
 mkdir -p $CARTRIDGES_OUTPUT_DIR
-mkdir -p ~/cartridges/experiments/rank_analysis/data
+mkdir -p $HF_HOME
 mkdir -p ~/cartridges/data/rank_analysis
 mkdir -p ~/cartridges/plots
 ```
@@ -138,7 +168,10 @@ separate job and wait for it to be ready.
 #SBATCH -J sglang-server
 
 module load anaconda3
-conda activate cartridges
+module load cuda/12.6.1
+conda activate ~/scratch/envs/cartridges
+
+export HF_HOME=~/scratch/hf_cache
 
 python -m sglang.launch_server \
     --model-path Qwen/Qwen3-4B \
@@ -179,10 +212,12 @@ compute node, you need to set `SGLANG_URL` to point to that node.
 #SBATCH -J rank-synth
 
 module load anaconda3
-conda activate cartridges
+module load cuda/12.6.1
+conda activate ~/scratch/envs/cartridges
 
 export CARTRIDGES_DIR=~/cartridges
-export CARTRIDGES_OUTPUT_DIR=~/cartridges_output
+export CARTRIDGES_OUTPUT_DIR=~/scratch/cartridges_output
+export HF_HOME=~/scratch/hf_cache
 export WANDB_MODE=offline
 
 # Point to the SGLang server node (adjust if needed)
@@ -197,8 +232,15 @@ python experiments/rank_analysis/synthesize_config.py
 sbatch slurm_synthesize.sh
 ```
 
-The parquet will be saved at:
-- `$CARTRIDGES_OUTPUT_DIR/rank_analysis_synth/artifact/dataset.parquet`
+The parquet will be saved under a timestamped + UUID path like:
+- `$CARTRIDGES_OUTPUT_DIR/<timestamp>-synthesize_config/<uuid>/artifact/dataset.parquet`
+
+Find the exact path after it finishes:
+```bash
+find ~/scratch/cartridges_output -name "dataset.parquet" | sort | tail -1
+```
+
+Copy that path — you'll need it for `--parquet` in training and collection.
 
 This single set of 256 conversations is used for everything: Cartridges training,
 SnapKV token selection, and rank measurement.
@@ -214,38 +256,55 @@ squeue -u $USER
 scancel <sglang_job_id>
 ```
 
-Each ratio trains a separate cartridge. They can run sequentially in one job.
+Submit one job per ratio — smaller jobs queue faster and failures don't block other ratios.
 
-`slurm_train.sh`:
+`submit_training.sh` (run this on the login/interactive node):
 
 ```bash
 #!/bin/bash
-#SBATCH -N 1 --ntasks-per-node=1
-#SBATCH --gres=gpu:A100:1
-#SBATCH --mem=64G
-#SBATCH --time=12:00:00
-#SBATCH -p ice-gpu
-#SBATCH -o train_%j.out
-#SBATCH -J rank-train
+# Run with: bash submit_training.sh
 
-module load anaconda3
-conda activate cartridges
-
-export CARTRIDGES_DIR=~/cartridges
-export CARTRIDGES_OUTPUT_DIR=~/cartridges_output
-export WANDB_MODE=offline
-
-cd $CARTRIDGES_DIR
+PARQUET=$(find $HOME/scratch/cartridges_output -name "dataset.parquet" | sort | tail -1)
+echo "Using parquet: $PARQUET"
 
 for ratio in 1.0 0.1 0.05 0.02; do
-    echo "=== Training ratio=$ratio ==="
-    python experiments/rank_analysis/train_configs.py --ratio $ratio
+    jobscript=$(mktemp /tmp/train_ratio_XXXX.sh)
+    cat > $jobscript << INNEREOF
+#!/bin/bash
+#SBATCH -N 1 --ntasks-per-node=1
+#SBATCH --gres=gpu:l40s:1
+#SBATCH --mem=64G
+#SBATCH --time=04:00:00
+#SBATCH -p coc-gpu,ice-gpu
+#SBATCH -o $HOME/cartridges/train_${ratio}_%j.out
+#SBATCH -J train-${ratio}
+
+module load anaconda3
+module load cuda/12.6.1
+conda activate $HOME/scratch/envs/cartridges
+
+export CARTRIDGES_DIR=$HOME/cartridges
+export CARTRIDGES_OUTPUT_DIR=$HOME/scratch/cartridges_output
+export HF_HOME=$HOME/scratch/hf_cache
+export WANDB_MODE=offline
+
+cd \$CARTRIDGES_DIR
+echo "=== Training ratio=${ratio} ==="
+python experiments/rank_analysis/train_configs.py --ratio ${ratio} --parquet ${PARQUET}
+INNEREOF
+
+    jobid=$(sbatch $jobscript | awk '{print $4}')
+    echo "Submitted ratio=${ratio} → job ${jobid}"
+    rm $jobscript
 done
 ```
 
 ```bash
-sbatch slurm_train.sh
+bash submit_training.sh
 ```
+
+> **Note:** Uses `$HOME` instead of `~` in the SBATCH `-o` line — `~` is not expanded by
+> SLURM and creates a literal `~/` subdirectory inside your home dir.
 
 Checkpoints will be saved at:
 - `$CARTRIDGES_OUTPUT_DIR/rank_analysis_ratio_<r>/cache_last.pt`
@@ -265,16 +324,20 @@ Checkpoints will be saved at:
 #SBATCH -J rank-collect
 
 module load anaconda3
-conda activate cartridges
+module load cuda/12.6.1
+conda activate ~/scratch/envs/cartridges
 
 export CARTRIDGES_DIR=~/cartridges
-export CARTRIDGES_OUTPUT_DIR=~/cartridges_output
+export CARTRIDGES_OUTPUT_DIR=~/scratch/cartridges_output
+export HF_HOME=~/scratch/hf_cache
 export WANDB_MODE=offline
 
 cd $CARTRIDGES_DIR
 
 DOC=qasper_e_line_203_context.txt
-PARQUET=$CARTRIDGES_OUTPUT_DIR/rank_analysis_synth/artifact/dataset.parquet
+# Find the parquet generated by synthesize_config.py (timestamped path)
+PARQUET=$(find $CARTRIDGES_OUTPUT_DIR -name "dataset.parquet" | sort | tail -1)
+echo "Using parquet: $PARQUET"
 OUT=data/rank_analysis
 
 # 1) init_full
@@ -323,7 +386,7 @@ Output files: `data/rank_analysis/{condition}.pt` (13 files total).
 #SBATCH -J rank-plot
 
 module load anaconda3
-conda activate cartridges
+conda activate ~/scratch/envs/cartridges
 
 cd ~/cartridges
 
@@ -338,7 +401,7 @@ sbatch slurm_plot.sh
 
 Output plots:
 - `plots/per_head_bars.pdf` — 288 per-head bar charts
-- `plots/heatmaps.pdf` — 13 heatmaps (V and Y side by side)
+- `plots/heatmaps.pdf` — 8 heatmaps (V and Y side by side)
 - `plots/summary.pdf` — mean erank vs condition
 - `plots/interesting_heads.pdf` — top interesting heads analysis
 
@@ -378,26 +441,3 @@ Reduce `global_batch_size` in `train_configs.py` (e.g., from 32 to 16).
 The hook captures Q and K_conv to CPU RAM. If CPU RAM is insufficient,
 reduce the number of eval conversations by truncating `eval_self_study.parquet`
 or lowering `max_tokens` in `tokenize_eval_conversations()`.
-
-
-cd ~/cartridges
-python3 - <<'EOF'
-import pandas as pd
-import json
-
-df = pd.read_parquet("~/scratch/cartridges_output/rank_analysis_synth/artifact/dataset.parquet")
-print(f"Total conversations: {len(df)}")
-print(f"Columns: {list(df.columns)}\n")
-
-# Print first 3 conversations
-for i, row in df.head(3).iterrows():
-    messages = row["messages"]
-    if isinstance(messages, str):
-        messages = json.loads(messages)
-    print(f"--- Conversation {i} ---")
-    for m in messages:
-        role = m["role"]
-        content = m["content"][:300]  # truncate long messages
-        print(f"[{role}]: {content}")
-    print()
-EOF
