@@ -57,7 +57,7 @@ config = SynthesizeConfig(
             ),
         ],
     ),
-    num_samples=256,
+    num_samples=2048,
     batch_size=1,
     max_num_batches_in_parallel=64,
     name="rank_analysis_synth",

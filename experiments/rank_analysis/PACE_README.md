@@ -378,3 +378,26 @@ Reduce `global_batch_size` in `train_configs.py` (e.g., from 32 to 16).
 The hook captures Q and K_conv to CPU RAM. If CPU RAM is insufficient,
 reduce the number of eval conversations by truncating `eval_self_study.parquet`
 or lowering `max_tokens` in `tokenize_eval_conversations()`.
+
+
+cd ~/cartridges
+python3 - <<'EOF'
+import pandas as pd
+import json
+
+df = pd.read_parquet("~/scratch/cartridges_output/rank_analysis_synth/artifact/dataset.parquet")
+print(f"Total conversations: {len(df)}")
+print(f"Columns: {list(df.columns)}\n")
+
+# Print first 3 conversations
+for i, row in df.head(3).iterrows():
+    messages = row["messages"]
+    if isinstance(messages, str):
+        messages = json.loads(messages)
+    print(f"--- Conversation {i} ---")
+    for m in messages:
+        role = m["role"]
+        content = m["content"][:300]  # truncate long messages
+        print(f"[{role}]: {content}")
+    print()
+EOF

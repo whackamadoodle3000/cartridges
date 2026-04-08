@@ -35,6 +35,13 @@ def make_train_config(
 ) -> TrainConfig:
     max_tokens = None if ratio >= 1.0 else int(ratio * 30_000)
 
+    if ratio >= 1.0:
+        lr = 1e-3
+    elif ratio >= 0.1:
+        lr = 5e-3
+    else:
+        lr = 2e-2
+
     return TrainConfig(
         model=HFModelConfig(
             pretrained_model_name_or_path="Qwen/Qwen3-4b",
@@ -45,8 +52,8 @@ def make_train_config(
             max_tokens=max_tokens,
         ),
 
-        lr=2e-2,
-        epochs=1,
+        lr=lr,
+        epochs=15,
         global_batch_size=32,
 
         dataset=TrainDataset.Config(
@@ -54,7 +61,7 @@ def make_train_config(
                 DataSource(path=parquet, type="local"),
             ],
             top_k_logits=20,
-            packed_seq_length=2048,
+            packed_seq_length=1024,
             packing_mode="truncate",
         ),
 
@@ -63,7 +70,7 @@ def make_train_config(
             LossEvalConfig(
                 dataset=LossEvalDataset.Config(
                     data_source=DataSource(path=parquet, type="local"),
-                    packed_seq_length=2048,
+                    packed_seq_length=1024,
                 ),
                 name_for_wandb="rank_analysis_loss",
             ),
@@ -78,12 +85,16 @@ def make_train_config(
 
 
 if __name__ == "__main__":
+    import sys
     parser = argparse.ArgumentParser()
     parser.add_argument("--ratio", type=float, required=True,
                         help="Compression ratio (1.0 = full, 0.5 = 50%%, etc.)")
     parser.add_argument("--doc", type=str, default=DEFAULT_DOC)
     parser.add_argument("--parquet", type=str, default=DEFAULT_PARQUET)
     args = parser.parse_args()
+
+    # Clear sys.argv so pydrantic.main doesn't try to re-parse our flags
+    sys.argv = sys.argv[:1]
 
     config = make_train_config(
         ratio=args.ratio,
