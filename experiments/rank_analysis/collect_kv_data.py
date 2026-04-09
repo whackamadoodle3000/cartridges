@@ -140,10 +140,11 @@ def compute_attention_outputs(keys, values, Q_per_layer, K_conv_per_layer):
     scale = 1.0 / math.sqrt(HEAD_DIM)
 
     for l in range(N_LAYERS):
-        K_cart_l = keys[l].float()       # (n_kv_heads, T_cart, head_dim)
-        V_cart_l = values[l].float()      # (n_kv_heads, T_cart, head_dim)
-        Q_l = Q_per_layer[l][0].float()   # (n_q_heads, n_conv, head_dim)
-        K_conv_l = K_conv_per_layer[l][0].float()  # (n_kv_heads, n_conv, head_dim)
+        Q_l = Q_per_layer[l][0].float()             # (n_q_heads, n_conv, head_dim)
+        K_conv_l = K_conv_per_layer[l][0].float()   # (n_kv_heads, n_conv, head_dim)
+        device = K_conv_l.device
+        K_cart_l = keys[l].float().to(device)       # (n_kv_heads, T_cart, head_dim)
+        V_cart_l = values[l].float().to(device)     # (n_kv_heads, T_cart, head_dim)
 
         T_cart = K_cart_l.shape[1]
         n_conv = K_conv_l.shape[1]

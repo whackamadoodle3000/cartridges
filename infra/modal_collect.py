@@ -92,7 +92,9 @@ def collect(condition: str, ratio: Optional[float], checkpoint_volume_path: Opti
     }
 
     print(f"Running: {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, env=env, check=True)
+    result = subprocess.run(cmd, env=env, capture_output=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"collect_kv_data.py failed with exit code {result.returncode}")
     results_vol.commit()
     print("Done.", flush=True)
 
