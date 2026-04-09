@@ -35,13 +35,6 @@ def make_train_config(
 ) -> TrainConfig:
     max_tokens = None if ratio >= 1.0 else int(ratio * 30_000)
 
-    if ratio >= 1.0:
-        lr = 1e-3
-    elif ratio >= 0.1:
-        lr = 5e-3
-    else:
-        lr = 2e-2
-
     return TrainConfig(
         model=HFModelConfig(
             pretrained_model_name_or_path="Qwen/Qwen3-4b",
@@ -52,7 +45,7 @@ def make_train_config(
             max_tokens=max_tokens,
         ),
 
-        lr=lr,
+        lr=2e-2,
         epochs=1,
         global_batch_size=32,
 
@@ -61,7 +54,7 @@ def make_train_config(
                 DataSource(path=parquet, type="local"),
             ],
             top_k_logits=20,
-            packed_seq_length=1024,
+            packed_seq_length=2048,
             packing_mode="truncate",
         ),
 
@@ -69,8 +62,11 @@ def make_train_config(
         loss_evals=[
             LossEvalConfig(
                 dataset=LossEvalDataset.Config(
-                    data_source=DataSource(path=parquet, type="local"),
-                    packed_seq_length=1024,
+                    # Limit to 32 conversations for fast eval (matches arxiv example).
+                    # Using full 8192-sample parquet would evaluate ~1600 packed sequences
+                    # every 16 steps which is extremely slow.
+                    data_source=DataSource(path=parquet, type="local", limit=32),
+                    packed_seq_length=2048,
                 ),
                 name_for_wandb="rank_analysis_loss",
             ),
