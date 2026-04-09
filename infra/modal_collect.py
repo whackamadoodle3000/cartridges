@@ -83,8 +83,16 @@ def collect(condition: str, ratio: Optional[float], checkpoint_volume_path: Opti
     if checkpoint_volume_path is not None:
         cmd += ["--trained-checkpoint", checkpoint_volume_path]
 
+    env = {
+        **os.environ,
+        "CARTRIDGES_DIR": "/root/cartridges",
+        "CARTRIDGES_OUTPUT_DIR": "/outputs",
+        "WANDB_MODE": "offline",
+        "HF_HOME": "/root/.cache/huggingface",
+    }
+
     print(f"Running: {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, env=env, check=True)
     results_vol.commit()
     print("Done.", flush=True)
 
