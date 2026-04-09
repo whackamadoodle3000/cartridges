@@ -37,6 +37,7 @@ image = (
         "pip install torch --index-url https://download.pytorch.org/whl/cu126",
         "pip install 'numpy<2'",
     )
+    .run_commands("cd /root/cartridges && git pull", force_build=True)
 )
 
 # ---------------------------------------------------------------------------

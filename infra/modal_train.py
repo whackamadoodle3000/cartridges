@@ -40,6 +40,8 @@ image = (
         "pip install torch --index-url https://download.pytorch.org/whl/cu126",
         "pip install 'numpy<2'",
     )
+    # Always pull latest code at image build time to bust the cache on each run
+    .run_commands("cd /root/cartridges && git pull", force_build=True)
 )
 
 # ---------------------------------------------------------------------------
