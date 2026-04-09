@@ -190,6 +190,59 @@ def plot_summary(ranks: dict, output_dir: str):
     print(f"Saved summary plot to {path}")
 
 
+def plot_avg_per_head(ranks: dict, output_dir: str):
+    """Plot: average erank_V and erank_Y per KV head (averaged over all layers)."""
+    path = os.path.join(output_dir, "avg_per_head.pdf")
+    conds = [c for c in CONDITION_ORDER if c in ranks]
+    x = np.arange(N_KV_HEADS)
+    width = 0.8 / max(len(conds), 1)
+
+    with PdfPages(path) as pdf:
+        for metric_key, metric_label in [("erank_V", "erank(V)"), ("erank_Y", "erank(Y)")]:
+            fig, ax = plt.subplots(figsize=(14, 5))
+            for i, cond in enumerate(conds):
+                vals = ranks[cond][metric_key].mean(axis=0)  # (N_KV_HEADS,)
+                offset = (i - len(conds) / 2 + 0.5) * width
+                ax.bar(x + offset, vals, width=width * 0.9,
+                       label=cond, color=CONDITION_COLORS.get(cond))
+            ax.set_xticks(x)
+            ax.set_xticklabels([f"Head {h}" for h in range(N_KV_HEADS)])
+            ax.set_xlabel("KV Head")
+            ax.set_ylabel("Effective Rank")
+            ax.set_title(f"Average {metric_label} per Head (averaged over {N_LAYERS} layers)")
+            ax.legend(fontsize=7, ncol=2)
+            ax.grid(axis="y", alpha=0.3)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+    print(f"Saved avg per-head plot to {path}")
+
+
+def plot_avg_per_layer(ranks: dict, output_dir: str):
+    """Plot: average erank_V and erank_Y per layer (averaged over all KV heads)."""
+    path = os.path.join(output_dir, "avg_per_layer.pdf")
+    conds = [c for c in CONDITION_ORDER if c in ranks]
+    x = np.arange(N_LAYERS)
+
+    with PdfPages(path) as pdf:
+        for metric_key, metric_label in [("erank_V", "erank(V)"), ("erank_Y", "erank(Y)")]:
+            fig, ax = plt.subplots(figsize=(18, 5))
+            for cond in conds:
+                vals = ranks[cond][metric_key].mean(axis=1)  # (N_LAYERS,)
+                ax.plot(x, vals, "o-", label=cond,
+                        color=CONDITION_COLORS.get(cond), markersize=4)
+            ax.set_xticks(range(0, N_LAYERS, 2))
+            ax.set_xlabel("Layer")
+            ax.set_ylabel("Effective Rank")
+            ax.set_title(f"Average {metric_label} per Layer (averaged over {N_KV_HEADS} heads)")
+            ax.legend(fontsize=7, ncol=2)
+            ax.grid(alpha=0.3)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+    print(f"Saved avg per-layer plot to {path}")
+
+
 def plot_interesting_heads(ranks: dict, output_dir: str):
     """Plot 4: top interesting heads analysis + printed table."""
     path = os.path.join(output_dir, "interesting_heads.pdf")
@@ -316,6 +369,8 @@ def main():
     plot_per_head_bars(ranks, args.output_dir)
     plot_heatmaps(ranks, args.output_dir)
     plot_summary(ranks, args.output_dir)
+    plot_avg_per_head(ranks, args.output_dir)
+    plot_avg_per_layer(ranks, args.output_dir)
     plot_interesting_heads(ranks, args.output_dir)
 
     print("\nAll plots generated.")

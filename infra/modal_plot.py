@@ -25,8 +25,8 @@ app = modal.App("cartridges-plot")
 
 @app.function(
     image=image,
-    cpu=4,
-    memory=32768,  # 32 GB RAM for loading all .pt files
+    cpu=8,
+    memory=65536,  # 64 GB RAM — all .pt files loaded simultaneously
     timeout=30 * 60,
     volumes={
         "/results": results_vol,
