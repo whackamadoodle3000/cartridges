@@ -36,6 +36,7 @@ image = (
         "cd /root/cartridges && uv pip install --system -e .",
         "pip install torch --index-url https://download.pytorch.org/whl/cu126",
         "pip install 'numpy<2'",
+        "pip install pyyaml",
     )
     .run_commands("cd /root/cartridges && git pull", force_build=True)
 )
@@ -95,59 +96,55 @@ def main(
 ):
     """
     parquet:          local path to dataset.parquet
-    checkpoints_dir:  local directory with downloaded training checkpoints,
-                      expected layout:
-                        <checkpoints_dir>/
-                          2026-...-train_configs/<uuid>/artifact/cache_last.pt  (ratio 1.0)
-                          ...
-                      OR pass the Modal volume paths directly if you haven't downloaded yet.
+    checkpoints_dir:  local dir with downloaded checkpoints (from modal_train.py)
+                      Layout: <checkpoints_dir>/<run-dir>/<uuid>/cache-step*.pt
     """
-    # Upload parquet (idempotent — re-uploading is fine)
     local_parquet = Path(parquet)
     assert local_parquet.exists(), f"Parquet not found: {local_parquet}"
+
+    # Upload parquet
     print(f"Uploading parquet to Modal volume...")
-    with data_vol.batch_upload() as batch:
+    with data_vol.batch_upload(force=True) as batch:
         batch.put_file(str(local_parquet), local_parquet.name)
     print("Parquet uploaded.")
 
-    ratios = [1.0, 0.1, 0.05, 0.02]
+    # Find local checkpoints and upload them to the data volume
+    ckpt_dir = Path(checkpoints_dir)
+    ratio_to_ckpt = {}
+    for run_dir in sorted(ckpt_dir.glob("*train_configs")):
+        for config_yaml in run_dir.glob("*/config.yaml"):
+            import yaml
+            cfg = yaml.safe_load(config_yaml.read_text())
+            name = cfg.get("name", "")
+            for ratio in [1.0, 0.1, 0.05, 0.02]:
+                if f"ratio_{ratio}" in name:
+                    # Find the checkpoint file
+                    uuid_dir = config_yaml.parent
+                    ckpts = sorted(uuid_dir.glob("cache-step*.pt")) + sorted(uuid_dir.glob("cache_last.pt"))
+                    if ckpts:
+                        ratio_to_ckpt[ratio] = ckpts[-1]  # take latest step
 
-    # Find checkpoints in the output volume
-    # Training saves to /outputs/<run-dir>/<uuid>/artifact/cache_last.pt
-    # We look for checkpoint files matching each ratio by run name
-    def find_checkpoint(ratio: float) -> Optional[str]:
-        """Return the volume path to cache_last.pt for a given ratio."""
-        # Try to find it by listing the output volume
-        try:
-            entries = list(output_vol.listdir("/"))
-            for entry in entries:
-                if f"ratio_{ratio}" in entry.path or f"ratio-{ratio}" in entry.path:
-                    # Walk into it to find cache_last.pt
-                    for sub in output_vol.listdir(f"/{entry.path}"):
-                        for artifact in output_vol.listdir(f"/{entry.path}/{sub.path}/artifact"):
-                            if "cache_last" in artifact.path or "cache-step" in artifact.path:
-                                return f"/outputs/{entry.path}/{sub.path}/artifact/{artifact.path}"
-        except Exception as e:
-            print(f"Warning: could not find checkpoint for ratio {ratio}: {e}")
-        return None
+    print(f"\nFound checkpoints: { {r: str(p.name) for r, p in ratio_to_ckpt.items()} }")
+
+    # Upload checkpoints to Modal data volume
+    print("Uploading checkpoints to Modal volume...")
+    with data_vol.batch_upload(force=True) as batch:
+        for ratio, local_ckpt in ratio_to_ckpt.items():
+            remote_name = f"cache_ratio_{ratio}.pt"
+            batch.put_file(str(local_ckpt), remote_name)
+            print(f"  {ratio} → /data/{remote_name}")
+    print("Checkpoints uploaded.")
 
     # Build job list
     jobs = []
+    jobs.append(("init_full", None, None))                    # full doc, no training
 
-    # Baseline: full document, no training
-    jobs.append(("init_full", None, None))
-
-    # Trained conditions
-    for ratio in ratios:
-        ckpt = find_checkpoint(ratio)
-        if ckpt is None:
-            print(f"WARNING: no checkpoint found for ratio={ratio}, skipping trained condition")
+    for ratio in [1.0, 0.1, 0.05, 0.02]:
+        if ratio in ratio_to_ckpt:
+            jobs.append(("trained", ratio, f"/data/cache_ratio_{ratio}.pt"))
         else:
-            print(f"Found checkpoint for ratio={ratio}: {ckpt}")
-            condition = "trained" if ratio < 1.0 else "trained"
-            jobs.append((condition, ratio, ckpt))
+            print(f"WARNING: no checkpoint for ratio={ratio}, skipping")
 
-    # SnapKV conditions (no checkpoint needed)
     for ratio in [0.1, 0.05, 0.02]:
         jobs.append(("snapkv", ratio, None))
 

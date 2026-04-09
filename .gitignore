@@ -185,3 +185,4 @@ scratch/ryan/wandb
 secrets/
 
 ignore/
+*.pt

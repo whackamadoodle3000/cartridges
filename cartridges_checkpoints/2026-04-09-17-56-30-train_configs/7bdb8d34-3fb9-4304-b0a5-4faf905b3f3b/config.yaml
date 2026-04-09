@@ -1,0 +1,147 @@
+_config_type:
+  _is_type: true
+  _module: cartridges.train
+  _qualname: TrainConfig
+dataset:
+  _config_type:
+    _is_type: true
+    _module: cartridges.datasets
+    _qualname: TrainDataset.Config
+  data_sources:
+  - _config_type:
+      _is_type: true
+      _module: cartridges.datasets
+      _qualname: DataSource
+    limit: null
+    path: /data/dataset.parquet
+    type: local
+  is_wandb: false
+  kwargs: {}
+  packed_seq_length: 1024
+  packing_mode: truncate
+  target:
+    _is_type: true
+    _module: cartridges.datasets
+    _qualname: TrainDataset
+  targets: logits
+  top_k_logits: 20
+  user_prompt_prefix: null
+device: cuda
+distributed_backend: gloo
+epochs: 1
+generate_before_training: true
+generate_eval_every_n_steps: null
+generate_evals: []
+global_batch_size: 32
+keep_last_n_saved: 1
+kv_cache_initializer:
+  _config_type:
+    _is_type: true
+    _module: cartridges.initialization.text
+    _qualname: KVFromText.Config
+  kwargs: {}
+  max_tokens: null
+  num_frozen_tokens: 1
+  system_prompt_template: '{text}'
+  target:
+    _is_type: true
+    _module: cartridges.initialization.text
+    _qualname: KVFromText
+  text_source: /root/cartridges/qasper_e_line_203_context.txt
+launch_id: 2026-04-09-17-56-30-train_configs
+log_logprob_viz: false
+log_time: false
+loss_eval_every_n_steps: 16
+loss_evals:
+- _config_type:
+    _is_type: true
+    _module: cartridges.train
+    _qualname: LossEvalConfig
+  dataset:
+    _config_type:
+      _is_type: true
+      _module: cartridges.datasets
+      _qualname: LossEvalDataset.Config
+    data_source:
+      _config_type:
+        _is_type: true
+        _module: cartridges.datasets
+        _qualname: DataSource
+      limit: null
+      path: /data/dataset.parquet
+      type: local
+    is_wandb: false
+    kwargs: {}
+    packed_seq_length: 1024
+    packing_mode: pad
+    system_prompt: null
+    target:
+      _is_type: true
+      _module: cartridges.datasets
+      _qualname: LossEvalDataset
+    targets: tokens
+    user_prompt_prefix: null
+  name_for_wandb: rank_analysis_loss
+lr: 0.001
+lr_scheduler: null
+max_optimizer_steps: -1
+model:
+  _config_type:
+    _is_type: true
+    _module: cartridges.models.config
+    _qualname: HFModelConfig
+  attn_implementation: null
+  checkpoint_path: null
+  load_kwargs: {}
+  model_cls:
+    _is_type: true
+    _module: cartridges.models.qwen.modeling_qwen3
+    _qualname: FlexQwen3ForCausalLM
+  peft:
+    _config_type:
+      _is_type: true
+      _module: cartridges.models.config
+      _qualname: PeftConfig
+    adapter_non_linearity: relu
+    adapter_reduction_factor: 16
+    alpha: 16
+    bias: none
+    dropout: 0.0
+    enabled: false
+    encoder_dropout: 0.0
+    encoder_hidden_size: null
+    encoder_reparameterization_type: MLP
+    extra_params: {}
+    method: lora
+    num_virtual_tokens: 20
+    prefix_projection: false
+    prompt_tuning_init: null
+    prompt_tuning_init_text: null
+    r: 8
+    target_modules: null
+    task_type: CAUSAL_LM
+  pretrained_model_name_or_path: Qwen/Qwen3-4b
+  tuning_method: custom_prefix
+name: rank_analysis_ratio_1.0
+optimizer: adam
+output_dir: /outputs
+pretrained_cache_path: null
+run_dir: /outputs/2026-04-09-17-56-30-train_configs/7bdb8d34-3fb9-4304-b0a5-4faf905b3f3b
+run_id: 7bdb8d34-3fb9-4304-b0a5-4faf905b3f3b
+save_after_training: true
+save_every_n_steps: 9999
+save_to_wandb: true
+script_id: train_configs
+seed: 42
+wandb:
+  _config_type:
+    _is_type: true
+    _module: cartridges.utils.wandb
+    _qualname: WandBConfig
+  entity: null
+  group: null
+  name: null
+  notes: null
+  project: cartridges
+  tags: []
+weight_decay: 0.0
