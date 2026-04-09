@@ -263,7 +263,7 @@ def tokenize_conversations(parquet_path: str, tokenizer) -> torch.Tensor:
     """
     import json
 
-    df = pd.read_parquet(parquet_path)
+    df = pd.read_parquet(parquet_path).sample(frac=1, random_state=42).reset_index(drop=True)
 
     all_ids = []
     for _, row in df.iterrows():
