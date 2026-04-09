@@ -9,6 +9,7 @@ import modal
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git")
     .pip_install("torch", "matplotlib", "numpy")
     .run_commands(
         "git clone https://github.com/whackamadoodle3000/cartridges /root/cartridges",
