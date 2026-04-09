@@ -103,7 +103,7 @@ def main(
     container_path = f"/data/{volume_file}"  # what the container sees
 
     print(f"Uploading {local_path} → Modal volume (container path: {container_path}) ...")
-    with data_vol.batch_upload() as batch:
+    with data_vol.batch_upload(force=True) as batch:
         batch.put_file(str(local_path), volume_file)
     print("Upload complete.")
 
