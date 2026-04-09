@@ -15,17 +15,17 @@ root = Path(__file__).parent.parent.parent
 # --- BEGIN ARGS ---
 PORT = 8080
 BRANCH = os.environ.get("BRANCH", "geoff/cartridges")
-MODEL_NAME = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.2-3B-Instruct") 
+MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen3-4b") 
 DP_SIZE = int(os.environ.get("DP_SIZE", 1))
 PP_SIZE = int(os.environ.get("PP_SIZE", 1))
 MAX_TOPK_LOGPROBS = int(os.environ.get("MAX_TOPK_LOGPROBS", 20))
 GPU_TYPE: Literal["H100", "H200", "B200", "A100-80GB", "A100-40GB"] = os.environ.get("GPU_TYPE", "H100")
 MIN_CONTAINERS = int(os.environ.get("MIN_CONTAINERS", 0))
-MAX_CONTAINERS = int(os.environ.get("MAX_CONTAINERS", 32))
+MAX_CONTAINERS = int(os.environ.get("MAX_CONTAINERS", 10))
 SCALEDOWN_WINDOW = int(os.environ.get("SCALEDOWN_WINDOW", 1))
 ALLOW_CONCURRENT_INPUTS = int(os.environ.get("ALLOW_CONCURRENT_INPUTS", 8))
 MAX_COMPLETION_TOKENS = os.environ.get("MAX_COMPLETION_TOKENS", str(128_000))
-SECRETS = os.environ.get("SECRETS", "sabri-api-keys")
+SECRETS = os.environ.get("SECRETS", "")
 # --- END ARGS ---
 
 MINUTES = 60  # seconds
@@ -90,7 +90,7 @@ def wait_for_port(port, host="localhost", timeout=60.0):
     scaledown_window=SCALEDOWN_WINDOW * MINUTES,
     min_containers=MIN_CONTAINERS,
     max_containers=MAX_CONTAINERS,
-    secrets=[modal.Secret.from_name(SECRETS)],
+    secrets=[modal.Secret.from_name(SECRETS)] if SECRETS else [],
     volumes={
         "/root/.cache/huggingface": hf_cache_vol,
         "/root/.cache/flashinfer": flashinfer_cache_vol,
@@ -118,9 +118,7 @@ def serve():
         f"max_topk_logprobs={MAX_TOPK_LOGPROBS}",
         f"port={PORT}",
         f"dp_size={DP_SIZE}",
-        f"wandb_enabled=True",
-        f"wandb_entity=hazy-research",
-        f"wandb_project=tokasaurus",
+        f"wandb_enabled=False",
     ]
     if MAX_COMPLETION_TOKENS is not None:
         cmd.append(f"max_completion_tokens={MAX_COMPLETION_TOKENS}")   

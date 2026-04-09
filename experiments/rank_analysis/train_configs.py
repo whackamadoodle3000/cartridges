@@ -53,7 +53,7 @@ def make_train_config(
         ),
 
         lr=lr,
-        epochs=15,
+        epochs=1,
         global_batch_size=32,
 
         dataset=TrainDataset.Config(

@@ -1,19 +1,19 @@
 """
 Self-study synthesis for rank analysis experiment.
 
-Generates 256 synthetic Q&A conversations about the document using Qwen3-4B
-served locally via SGLang. A single set of conversations is used for everything:
-Cartridges training, SnapKV token selection, and rank measurement.
+Generates 8192 synthetic Q&A conversations about the document using Qwen3-4B
+served via Tokasaurus (Modal or local). A single set of conversations is used
+for everything: Cartridges training, SnapKV token selection, and rank measurement.
 
 Usage:
-    # Start SGLang server first (see PACE_README.md), then:
+    export TOKASAURUS_URL="https://your-modal-deployment.modal.run"
     python synthesize_config.py
 """
 import os
 
 import pydrantic
 
-from cartridges.clients.openai import OpenAIClient
+from cartridges.clients.tokasaurus import TokasaurusClient
 from cartridges.data.chunkers import TokenChunker
 from cartridges.data.resources import TextFileResource
 from cartridges.synthesize import SynthesizeConfig
@@ -22,15 +22,14 @@ from cartridges.synthesizers.self_study import SelfStudySynthesizer
 
 CARTRIDGES_DIR = os.environ["CARTRIDGES_DIR"]
 OUTPUT_DIR = os.environ.get("CARTRIDGES_OUTPUT_DIR", ".")
-SGLANG_URL = os.environ.get("SGLANG_URL", "http://localhost:30000/v1")
+TOKASAURUS_URL = os.environ.get("TOKASAURUS_URL", "http://localhost:8080")
 
 DOC_PATH = os.path.join(CARTRIDGES_DIR, "qasper_e_line_203_context.txt")
 
 
-client = OpenAIClient.Config(
+client = TokasaurusClient.Config(
     model_name="Qwen/Qwen3-4b",
-    base_url=SGLANG_URL,
-    api_key="dummy",
+    url=TOKASAURUS_URL,
 )
 
 config = SynthesizeConfig(
@@ -57,9 +56,9 @@ config = SynthesizeConfig(
             ),
         ],
     ),
-    num_samples=2048,
+    num_samples=8192,
     batch_size=1,
-    max_num_batches_in_parallel=64,
+    max_num_batches_in_parallel=80,
     name="rank_analysis_synth",
     output_dir=OUTPUT_DIR,
     upload_to_wandb=False,
