@@ -212,9 +212,10 @@ def build_snapkv_cache(
 
     scale = 1.0 / math.sqrt(HEAD_DIM)
     for l in range(N_LAYERS):
-        K_full_l = full_keys[l].float()   # (n_kv_heads, T_full, head_dim)
-        V_full_l = full_values[l].float()
         Q_l = Q_per_layer[l][0].float()   # (n_q_heads, n_conv, head_dim)
+        device = Q_l.device
+        K_full_l = full_keys[l].float().to(device)   # (n_kv_heads, T_full, head_dim)
+        V_full_l = full_values[l].float().to(device)
 
         snap_k_heads = []
         snap_v_heads = []
