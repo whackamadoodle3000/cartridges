@@ -97,17 +97,21 @@ def main(
     local_path = Path(parquet)
     assert local_path.exists(), f"Parquet not found: {local_path}"
 
-    remote_path = f"/data/{local_path.name}"
-    print(f"Uploading {local_path} → Modal volume at {remote_path} ...")
+    # Volume is mounted at /data/ in the container.
+    # batch_upload paths are relative to the volume root, so just use the filename.
+    volume_file = local_path.name          # e.g. "dataset.parquet"
+    container_path = f"/data/{volume_file}"  # what the container sees
+
+    print(f"Uploading {local_path} → Modal volume (container path: {container_path}) ...")
     with data_vol.batch_upload() as batch:
-        batch.put_file(str(local_path), remote_path)
+        batch.put_file(str(local_path), volume_file)
     print("Upload complete.")
 
     ratios_to_run = [ratio] if ratio is not None else RATIOS
     print(f"Submitting training for ratios: {ratios_to_run}")
 
     # Run all ratios in parallel
-    for result in train.starmap([(r, remote_path) for r in ratios_to_run]):
+    for result in train.starmap([(r, container_path) for r in ratios_to_run]):
         pass
 
     print("All training runs complete. Checkpoints saved to Modal volume 'cartridges-outputs'.")
